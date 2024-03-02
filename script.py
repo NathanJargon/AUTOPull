@@ -20,41 +20,68 @@ headers = {
 }
 
 def auto_create_file_pull_and_merge():
-    response = requests.get(f"https://api.github.com/repos/{username}/{repo}/git/refs/heads/main", headers=headers)
-    response.raise_for_status()
-    sha = response.json()['object']['sha']
+    for i in range(10):
+        branch_name = f'new-branch-{i}'
+        file_name = f'new_file_{i}.txt'
+        create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
 
-    branch_data = {
-        'ref': 'refs/heads/new-branch',
-        'sha': sha
-    }
-    response = requests.post(create_branch_url, headers=headers, json=branch_data)
-    response.raise_for_status()
+        response = requests.get(f"https://api.github.com/repos/{username}/{repo}/git/refs/heads/main", headers=headers)
+        response.raise_for_status()
+        sha = response.json()['object']['sha']
 
-    file_data = {
-        'message': 'Create new_file.txt',
-        'content': 'SGVsbG8gd29ybGQ=', 
-        'branch': 'new-branch',
-    }
-    response = requests.put(create_file_url, headers=headers, json=file_data)
-    response.raise_for_status()
+        branch_data = {
+            'ref': f'refs/heads/{branch_name}',
+            'sha': sha
+        }
+        response = requests.post(create_branch_url, headers=headers, json=branch_data)
+        response.raise_for_status()
 
-    pull_data = {
-        'title': 'Auto pull request',
-        'head': 'new-branch', 
-        'base': 'main',  
-    }
-    response = requests.post(pull_url, headers=headers, json=pull_data)
-    response.raise_for_status()
-    pull_request = response.json()
+        file_data = {
+            'message': f'Create {file_name}',
+            'content': 'SGVsbG8gd29ybGQ=', 
+            'branch': branch_name,
+        }
+        response = requests.put(create_file_url, headers=headers, json=file_data)
+        response.raise_for_status()
 
-    merge_data = {
-        'base': pull_request['base']['ref'],
-        'head': pull_request['head']['ref'],
-        'commit_message': f"Auto-merging pull request #{pull_request['number']}",
-    }
-    response = requests.post(merge_url, headers=headers, json=merge_data)
-    response.raise_for_status()
-    print(f"Merged pull request #{pull_request['number']}.")
+        pull_data = {
+            'title': f'Auto pull request {i}',
+            'head': branch_name, 
+            'base': 'main',  
+        }
+        response = requests.post(pull_url, headers=headers, json=pull_data)
+        response.raise_for_status()
+        pull_request = response.json()
 
-auto_create_file_pull_and_merge()
+        merge_data = {
+            'base': pull_request['base']['ref'],
+            'head': pull_request['head']['ref'],
+            'commit_message': f"Auto-merging pull request #{pull_request['number']}",
+        }
+        response = requests.post(merge_url, headers=headers, json=merge_data)
+        response.raise_for_status()
+        print(f"Merged pull request #{pull_request['number']}.")
+
+def delete_files():
+    for i in range(10):
+        file_name = f'new_file_{i}.txt'
+        delete_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
+
+        # First, we need to get the file to find its SHA and path
+        response = requests.get(delete_file_url, headers=headers)
+        response.raise_for_status()
+        file_sha = response.json()['sha']
+        file_path = response.json()['path']
+
+        delete_data = {
+            'message': f'Delete {file_name}',
+            'sha': file_sha,
+            'branch': 'main',
+        }
+        response = requests.delete(delete_file_url, headers=headers, json=delete_data)
+        response.raise_for_status()
+        print(f"Deleted file {file_name}.")
+        
+   
+delete_files()    
+# auto_create_file_pull_and_merge()
