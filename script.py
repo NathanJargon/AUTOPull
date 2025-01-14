@@ -1,6 +1,8 @@
 import os
 import requests
 from dotenv import load_dotenv
+import time
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
 
@@ -13,63 +15,69 @@ create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/new_
 pull_url = f"https://api.github.com/repos/{username}/{repo}/pulls"
 merge_url = f"https://api.github.com/repos/{username}/{repo}/merges"
 create_branch_url = f"https://api.github.com/repos/{username}/{repo}/git/refs"
+list_files_url = f"https://api.github.com/repos/{username}/{repo}/contents"
 
 headers = {
     'Authorization': f'token {token}',
     'Accept': 'application/vnd.github.v3+json',
 }
 
+x, y = 700, 710
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def make_request(method, url, **kwargs):
+    response = requests.request(method, url, headers=headers, **kwargs)
+    response.raise_for_status()
+    return response
+
 def auto_create_file_pull_and_merge():
-    for i in range(10):
-        branch_name = f'new-branch-{i}'
-        file_name = f'new_file_{i}.txt'
-        create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
+    try:
+        for i in range(x, y):
+            branch_name = f'new-branch-{i}'
+            file_name = f'new_file_{i}.txt'
+            create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
 
-        response = requests.get(f"https://api.github.com/repos/{username}/{repo}/git/refs/heads/main", headers=headers)
-        response.raise_for_status()
-        sha = response.json()['object']['sha']
+            response = make_request('GET', f"https://api.github.com/repos/{username}/{repo}/git/refs/heads/main")
+            sha = response.json()['object']['sha']
 
-        branch_data = {
-            'ref': f'refs/heads/{branch_name}',
-            'sha': sha
-        }
-        response = requests.post(create_branch_url, headers=headers, json=branch_data)
-        response.raise_for_status()
+            branch_data = {
+                'ref': f'refs/heads/{branch_name}',
+                'sha': sha
+            }
+            make_request('POST', create_branch_url, json=branch_data)
 
-        file_data = {
-            'message': f'Create {file_name}',
-            'content': 'SGVsbG8gd29ybGQ=', 
-            'branch': branch_name,
-        }
-        response = requests.put(create_file_url, headers=headers, json=file_data)
-        response.raise_for_status()
+            file_data = {
+                'message': f'Create {file_name}',
+                'content': 'SGVsbG8gd29ybGQ=', 
+                'branch': branch_name,
+            }
+            make_request('PUT', create_file_url, json=file_data)
 
-        pull_data = {
-            'title': f'Auto pull request {i}',
-            'head': branch_name, 
-            'base': 'main',  
-        }
-        response = requests.post(pull_url, headers=headers, json=pull_data)
-        response.raise_for_status()
-        pull_request = response.json()
+            pull_data = {
+                'title': f'Auto pull request {i}',
+                'head': branch_name, 
+                'base': 'main',  
+            }
+            response = make_request('POST', pull_url, json=pull_data)
+            pull_request = response.json()
 
-        merge_data = {
-            'base': pull_request['base']['ref'],
-            'head': pull_request['head']['ref'],
-            'commit_message': f"Auto-merging pull request #{pull_request['number']}",
-        }
-        response = requests.post(merge_url, headers=headers, json=merge_data)
-        response.raise_for_status()
-        print(f"Merged pull request #{pull_request['number']}.")
+            merge_data = {
+                'base': pull_request['base']['ref'],
+                'head': pull_request['head']['ref'],
+                'commit_message': f"Auto-merging pull request #{pull_request['number']}",
+            }
+            make_request('POST', merge_url, json=merge_data)
+            print(f"Merged pull request #{pull_request['number']}.")
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        delete_all_txt_files()
 
 def delete_files():
-    for i in range(10):
+    for i in range(x, y):
         file_name = f'new_file_{i}.txt'
         delete_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
 
-        # First, we need to get the file to find its SHA and path
-        response = requests.get(delete_file_url, headers=headers)
-        response.raise_for_status()
+        response = make_request('GET', delete_file_url)
         file_sha = response.json()['sha']
         file_path = response.json()['path']
 
@@ -78,10 +86,25 @@ def delete_files():
             'sha': file_sha,
             'branch': 'main',
         }
-        response = requests.delete(delete_file_url, headers=headers, json=delete_data)
-        response.raise_for_status()
+        make_request('DELETE', delete_file_url, json=delete_data)
         print(f"Deleted file {file_name}.")
-        
-   
-delete_files()    
-# auto_create_file_pull_and_merge()
+
+def delete_all_txt_files():
+    response = make_request('GET', list_files_url)
+    files = response.json()
+    for file in files:
+        if file['name'].endswith('.txt'):
+            delete_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file['path']}"
+            response = make_request('GET', delete_file_url)
+            file_sha = response.json()['sha']
+            delete_data = {
+                'message': f'Delete {file["name"]}',
+                'sha': file_sha,
+                'branch': 'main',
+            }
+            make_request('DELETE', delete_file_url, json=delete_data)
+            print(f"Deleted file {file['name']}.")
+
+auto_create_file_pull_and_merge()
+time.sleep(1)
+delete_files()
