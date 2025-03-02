@@ -22,7 +22,17 @@ headers = {
     'Accept': 'application/vnd.github.v3+json',
 }
 
-x, y = 700, 710
+def read_values():
+    with open('values.txt', 'r') as file:
+        x = int(file.readline().strip())
+        y = int(file.readline().strip())
+    return x, y
+
+def write_values(x, y):
+    with open('values.txt', 'w') as file:
+        file.write(f"{x}\n{y}\n")
+
+x, y = read_values()
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def make_request(method, url, **kwargs):
@@ -68,6 +78,11 @@ def auto_create_file_pull_and_merge():
             }
             make_request('POST', merge_url, json=merge_data)
             print(f"Merged pull request #{pull_request['number']}.")
+        
+        # Increment x and y by 10 after successful run
+        x += 10
+        y += 10
+        write_values(x, y)
     except Exception as e:
         print(f"Error occurred: {e}")
         delete_all_txt_files()
@@ -105,6 +120,7 @@ def delete_all_txt_files():
             make_request('DELETE', delete_file_url, json=delete_data)
             print(f"Deleted file {file['name']}.")
 
+x, y = read_values()
 auto_create_file_pull_and_merge()
 time.sleep(1)
 delete_files()
