@@ -6,16 +6,18 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
 
+# Configuration
 email = os.getenv('GITHUB_EMAIL')
 username = os.getenv('REPO_OWNER')
 repo = os.getenv('REPO_NAME')
 token = os.getenv('GITHUB_TOKEN')
 
-create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/new_file.txt"
-pull_url = f"https://api.github.com/repos/{username}/{repo}/pulls"
-merge_url = f"https://api.github.com/repos/{username}/{repo}/merges"
-create_branch_url = f"https://api.github.com/repos/{username}/{repo}/git/refs"
-list_files_url = f"https://api.github.com/repos/{username}/{repo}/contents"
+# URLs
+base_url = f"https://api.github.com/repos/{username}/{repo}"
+pull_url = f"{base_url}/pulls"
+merge_url = f"{base_url}/merges"
+create_branch_url = f"{base_url}/git/refs"
+list_files_url = f"{base_url}/contents"
 
 headers = {
     'Authorization': f'token {token}',
@@ -23,16 +25,15 @@ headers = {
 }
 
 def read_values():
-    with open('values.txt', 'r') as file:
-        x = int(file.readline().strip())
-        y = int(file.readline().strip())
-    return x, y
+    try:
+        with open('values.txt', 'r') as file:
+            return tuple(map(int, file.read().split()))
+    except FileNotFoundError:
+        return (0, 10)  # Default values
 
 def write_values(x, y):
     with open('values.txt', 'w') as file:
         file.write(f"{x}\n{y}\n")
-
-x, y = read_values()
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def make_request(method, url, **kwargs):
@@ -41,86 +42,109 @@ def make_request(method, url, **kwargs):
     return response
 
 def auto_create_file_pull_and_merge():
+    global x, y
     try:
         for i in range(x, y):
             branch_name = f'new-branch-{i}'
             file_name = f'new_file_{i}.txt'
-            create_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
+            file_url = f"{base_url}/contents/{file_name}"
 
-            response = make_request('GET', f"https://api.github.com/repos/{username}/{repo}/git/refs/heads/main")
+            # Get main branch SHA
+            response = make_request('GET', f"{base_url}/git/refs/heads/main")
             sha = response.json()['object']['sha']
 
-            branch_data = {
+            # Create branch
+            make_request('POST', create_branch_url, json={
                 'ref': f'refs/heads/{branch_name}',
                 'sha': sha
-            }
-            make_request('POST', create_branch_url, json=branch_data)
+            })
 
-            file_data = {
+            # Create file
+            make_request('PUT', file_url, json={
                 'message': f'Create {file_name}',
-                'content': 'SGVsbG8gd29ybGQ=', 
+                'content': 'SGVsbG8gd29ybGQ=',  # Base64 encoded "Hello world"
                 'branch': branch_name,
-            }
-            make_request('PUT', create_file_url, json=file_data)
+            })
 
-            pull_data = {
+            # Create PR
+            response = make_request('POST', pull_url, json={
                 'title': f'Auto pull request {i}',
-                'head': branch_name, 
-                'base': 'main',  
-            }
-            response = make_request('POST', pull_url, json=pull_data)
-            pull_request = response.json()
+                'head': branch_name,
+                'base': 'main',
+            })
+            pr = response.json()
 
-            merge_data = {
-                'base': pull_request['base']['ref'],
-                'head': pull_request['head']['ref'],
-                'commit_message': f"Auto-merging pull request #{pull_request['number']}",
-            }
-            make_request('POST', merge_url, json=merge_data)
-            print(f"Merged pull request #{pull_request['number']}.")
-        
-        # Increment x and y by 10 after successful run
+            # Merge PR
+            make_request('POST', merge_url, json={
+                'base': pr['base']['ref'],
+                'head': pr['head']['ref'],
+                'commit_message': f"Merged PR #{pr['number']}",
+            })
+            print(f"Merged pull request #{pr['number']}")
+
+        # Update values only if successful
         x += 10
         y += 10
         write_values(x, y)
+
     except Exception as e:
-        print(f"Error occurred: {e}")
-        delete_all_txt_files()
+        print(f"Error: {str(e)}")
+        delete_files(suppress_errors=True)  # Cleanup before retrying
+        x += 10
+        y += 10
+        write_values(x, y)  # Ensure the loop does not retry the same values
 
-def delete_files():
-    for i in range(x, y):
-        file_name = f'new_file_{i}.txt'
-        delete_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file_name}"
+def delete_files(suppress_errors=False):
+    try:
+        # List all files in the repository
+        response = make_request('GET', list_files_url)
+        files = response.json()
 
-        response = make_request('GET', delete_file_url)
-        file_sha = response.json()['sha']
-        file_path = response.json()['path']
+        for file in files:
+            file_name = file['name']
+            if file_name.startswith('new'):
+                file_url = f"{base_url}/contents/{file_name}"
 
-        delete_data = {
-            'message': f'Delete {file_name}',
-            'sha': file_sha,
-            'branch': 'main',
-        }
-        make_request('DELETE', delete_file_url, json=delete_data)
-        print(f"Deleted file {file_name}.")
+                try:
+                    # Get file SHA
+                    response = make_request('GET', file_url)
+                    sha = response.json().get('sha')
 
-def delete_all_txt_files():
-    response = make_request('GET', list_files_url)
-    files = response.json()
-    for file in files:
-        if file['name'].endswith('.txt'):
-            delete_file_url = f"https://api.github.com/repos/{username}/{repo}/contents/{file['path']}"
-            response = make_request('GET', delete_file_url)
-            file_sha = response.json()['sha']
-            delete_data = {
-                'message': f'Delete {file["name"]}',
-                'sha': file_sha,
-                'branch': 'main',
-            }
-            make_request('DELETE', delete_file_url, json=delete_data)
-            print(f"Deleted file {file['name']}.")
+                    if not sha:
+                        print(f"Skipping deletion: {file_name} not found")
+                        continue
 
-x, y = read_values()
-auto_create_file_pull_and_merge()
-time.sleep(1)
-delete_files()
+                    # Delete file
+                    make_request('DELETE', file_url, json={
+                        'message': f'Delete {file_name}',
+                        'sha': sha,
+                        'branch': 'main',
+                    })
+                    print(f"Deleted {file_name}")
+
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        print(f"File {file_name} already removed or not found")
+                    elif not suppress_errors:
+                        raise
+
+    except Exception as e:
+        if not suppress_errors:
+            raise
+        print(f"Error during deletion: {str(e)}")
+
+def main():
+    global x, y
+    x, y = read_values()
+    
+    try:
+        auto_create_file_pull_and_merge()
+        time.sleep(1)
+        delete_files()
+    except Exception as e:
+        print(f"Fatal error: {str(e)}")
+        delete_files(suppress_errors=True)  # Ensure cleanup on fatal error
+        write_values(x, y)  # Preserve current state
+
+if __name__ == "__main__":
+    main()
